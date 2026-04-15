@@ -1,0 +1,64 @@
+# =====================
+# Dataset / large data
+# =====================
+dataset/
+*dataset*/
+
+# =====================
+# Training outputs
+# =====================
+swin_multilingual_outputs/
+crnn_multilingual_outputs/
+checkpoints/
+logs/
+plots/
+
+# Manifest/cache artifacts
+manifest_cache.parquet
+manifest_cache.parquet.meta.json
+*.parquet.meta.json
+
+# =====================
+# Archives / packages
+# =====================
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.tar.zst
+*.gz
+
+# =====================
+# Python cache/build
+# =====================
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.backup
+
+# =====================
+# Virtual envs / conda
+# =====================
+.venv/
+venv/
+env/
+conda-meta/
+
+# Local env/config (secrets)
+.env
+.env.*
+
+# =====================
+# IDE / editor
+# =====================
+.vscode/
+.idea/
+
+# =====================
+# OS files
+# =====================
+.DS_Store
+Thumbs.db

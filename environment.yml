@@ -1,0 +1,16 @@
+name: multilingual-ocr
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - numpy>=1.24
+  - pandas>=2.0
+  - matplotlib>=3.7
+  - pillow>=9.0
+  - tqdm>=4.66
+  - pyarrow>=14.0
+  - pytorch>=2.2
+  - torchvision>=0.17
+  - msgpack>=1.0.0
+  - lmdb>=1.0.0

@@ -22,7 +22,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torchvision.transforms as transforms
 from PIL import Image
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler, get_worker_info
 from tqdm import tqdm
 
@@ -1066,7 +1066,7 @@ def train(args):
             train_skipped_sum += int(skipped.sum().item())
 
             if scaler is not None:
-                with autocast():
+                with autocast(device_type='cuda'):
                     logits = model(images)
                     log_probs = logits.log_softmax(2)
                     targets, target_lengths = encode_labels(labels, char_to_idx)

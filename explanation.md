@@ -1288,7 +1288,7 @@ With AMP (FP16 + FP32):
 scaler = GradScaler()  # Initialize scaler
 
 # Forward pass in FP16
-with autocast():
+with autocast(device_type='cuda'):
     logits = model(images)
     log_probs = logits.log_softmax(2)
     loss = criterion(log_probs, targets, input_lengths, target_lengths)

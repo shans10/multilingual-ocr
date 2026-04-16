@@ -30,7 +30,16 @@ For **technical details**, architecture decisions, and theory behind the impleme
 
 ---
 
-## Installation
+## Environment Setup
+
+### Method 1: Conda (Recommended)
+
+```bash
+conda env create -f environment.yml
+conda activate multilingual-ocr
+```
+
+### Method 2: pip (Legacy)
 
 ```bash
 pip install -r requirements.txt
@@ -41,7 +50,7 @@ pip install -r requirements.txt
 - `pandas>=2.0`, `numpy>=1.24`
 - `matplotlib>=3.7`, `Pillow>=9.0`
 - `tqdm>=4.66`, `pyarrow>=14.0`
-- `msgpack>=1.0.0`, `lmdb>=1.0.0`
+- `msgpack>=0.9`, `lmdb>=0.9`
 
 ---
 

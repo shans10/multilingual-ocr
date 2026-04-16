@@ -27,7 +27,7 @@ from torchvision.models import swin_t
 from tqdm import tqdm
 
 matplotlib.use("Agg")
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 
 import matplotlib.pyplot as plt
 
@@ -1050,7 +1050,7 @@ def train(args):
             train_skipped_sum += int(skipped.sum().item())
 
             if scaler is not None:
-                with autocast():
+                with autocast(device_type='cuda'):
                     logits = model(images)
                     log_probs = logits.log_softmax(2)
                     targets, target_lengths = encode_labels(labels, char_to_idx)

@@ -27,9 +27,8 @@ from torchvision.models import swin_t
 from tqdm import tqdm
 
 matplotlib.use("Agg")
-from torch.amp import autocast, GradScaler
-
 import matplotlib.pyplot as plt
+from torch.amp import GradScaler, autocast
 
 
 @dataclass
@@ -970,7 +969,7 @@ def train(args):
         if not resume_path.exists():
             raise FileNotFoundError(f"Resume checkpoint not found: {resume_path}")
 
-        ckpt = torch.load(resume_path, map_location=device)
+        ckpt = torch.load(resume_path, map_location=device, weights_only=True)
         model.load_state_dict(ckpt["model_state_dict"])
         if "optimizer_state_dict" in ckpt:
             optimizer.load_state_dict(ckpt["optimizer_state_dict"])
@@ -1050,14 +1049,17 @@ def train(args):
             train_skipped_sum += int(skipped.sum().item())
 
             if scaler is not None:
-                with autocast(device_type='cuda'):
+                with autocast(device_type="cuda"):
                     logits = model(images)
                     log_probs = logits.log_softmax(2)
                     targets, target_lengths = encode_labels(labels, char_to_idx)
                     targets = targets.to(device)
                     target_lengths = target_lengths.to(device)
                     input_lengths = torch.full(
-                        (images.size(0),), logits.size(0), dtype=torch.long, device=device
+                        (images.size(0),),
+                        logits.size(0),
+                        dtype=torch.long,
+                        device=device,
                     )
                     loss = criterion(log_probs, targets, input_lengths, target_lengths)
 
@@ -1185,7 +1187,9 @@ def train(args):
     tqdm.write("")
     tqdm.write("Training complete.")
     tqdm.write("Starting test evaluation on the best checkpoint...")
-    best_ckpt = torch.load(ckpt_dir / "best_checkpoint.pth", map_location=device)
+    best_ckpt = torch.load(
+        ckpt_dir / "best_checkpoint.pth", map_location=device, weights_only=True
+    )
     model.load_state_dict(best_ckpt["model_state_dict"])
     test_metrics = evaluate(
         model,

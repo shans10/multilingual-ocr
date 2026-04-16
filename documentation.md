@@ -351,6 +351,34 @@ The Swin model collapses spatial information into a single vector via global ave
 | Stage 3 | 3×14 | 384 |
 | Stage 4 | 1×7 | 768 |
 
+#### Which Swin Variant Are We Using?
+
+This code uses **Swin-Tiny** from torchvision:
+```python
+from torchvision.models import swin_t
+self.backbone = swin_t(weights=None)
+```
+
+**Available Swin Variants:**
+
+| Variant | Parameters | Channel Progression |
+|---------|------------|---------------------|
+| **Swin-Tiny** (ours) | ~28M | 96 → 192 → 384 → 768 |
+| Swin-Small | ~50M | 96 → 192 → 384 → 768 |
+| Swin-Base | ~88M | 128 → 256 → 512 → 1024 |
+
+We use Swin-Tiny because it balances accuracy and computational cost for multilingual OCR tasks.
+
+#### About Spatial Reduction
+
+Each stage halves both height and width while doubling channels. This trade-off enables the model to:
+- Process larger effective receptive fields in later stages
+- Reduce computational cost for attention layers
+- Capture hierarchical feature representations
+
+**Why This Matters:**
+The spatial reduction from 48×224 to 1×7 compresses the entire image into a single global vector. While this loses exact positional information, the attention mechanism within each window still captures local features effectively.
+
 **Parameter Count (~28M total):**
 
 | Component | Parameters | Percentage |
@@ -362,6 +390,27 @@ The Swin model collapses spatial information into a single vector via global ave
 | Stage 4 (2 blocks) | ~0.9M | 3% |
 | Final Norm + AvgPool | ~2K | 0.01% |
 | Linear Projection | ~2M | ~7% |
+
+#### About Parameter Distribution - Simple Explanation
+
+**Stage-by-stage breakdown:**
+
+- **Stage 3 (40%)**: Highest because it has 6 transformer blocks, each with attention + MLP
+- **Stage 2 (45%)**: Second highest but with 2 blocks at higher 192 channels
+- **Stage 1 (12%)**: Only 2 blocks at smaller 96 channels
+- **Stage 4 (3%)**: Only 2 blocks but reduced to 1×7 spatial
+
+**Why attention is the main cost:**
+Each transformer block contains:
+- 4 "learnable matrices" for Query, Key, Value, and Output
+- A feed-forward network that expands features 4x then compresses back
+
+Think of these matrices as "lookup tables" the network learns during training. Each matrix is a grid of numbers that transforms the input features. More channels = larger grids = more parameters.
+
+**Simple math (concept only):**
+- 1 attention matrix ≈ channels × channels (e.g., 768 × 768 = ~590K numbers)
+- Each Swin block has ~4-5 such matrices
+- Multiple blocks stack together = lots of parameters
 
 **Activation Functions:**
 
@@ -378,6 +427,50 @@ The Swin model collapses spatial information into a single vector via global ave
 - **Shifted Windows**: Alternating shift by 3 pixels
 - **Relative Position Bias**: Learnable positional encoding
 - **MLP Ratio**: 4× hidden dimension (3072 for 768)
+
+---
+
+### VRAM Usage - Swin-Tiny
+
+VRAM (Video RAM) is the GPU memory needed to train the model. Here's how it's used:
+
+**What's stored in VRAM during training:**
+
+| Component | Description | Size (approximate) |
+|-----------|-------------|-------------------|
+| **Model weights** | The learned parameters | 28M × 2 bytes = ~56MB |
+| **Gradients** | Derivatives for backpropagation | 28M × 4 bytes = ~112MB |
+| **Adam optimizer state** | Momentum for each parameter (2 buffers) | 28M × 8 bytes = ~224MB |
+| **Activations** | Intermediate values during forward pass | Varies by layer |
+
+**Activations breakdown by stage:**
+
+| Stage | Activation Size per Sample | Total for Batch 32 |
+|-------|---------------------------|---------------------|
+| Stage 1 | 12×56×96 × 2 | ~130KB |
+| Stage 2 | 6×28×192 × 2 | ~65KB |
+| Stage 3 | 3×14×384 × 2 | ~32KB |
+| Stage 4 | 1×7×768 × 2 | ~11KB |
+| **Total activations** | | ~240KB per sample |
+
+**Estimated VRAM for training:**
+
+| Batch Size | Estimated VRAM |
+|-----------|----------------|
+| 16 | ~500MB |
+| 32 | ~700MB-1GB |
+| 64 | ~1.2GB-1.5GB |
+| 128 | May exceed 2GB (OOM risk) |
+
+**With AMP (Automatic Mixed Precision):**
+- Model weights stored in FP16 (~56MB instead of 112MB)
+- Gradients computed in FP32 for stability
+- Total VRAM reduced by ~30-40%
+
+| Batch Size with AMP | Estimated VRAM |
+|-----------------|-----------------|
+| 32 | ~500MB-700MB |
+| 64 | ~800MB-1GB |
 
 ---
 
@@ -526,12 +619,48 @@ if height != 1:
 | BiLSTM Layer 1 (256 hidden) | ~790K | 15% |
 | BiLSTM Layer 2 (256 hidden) | ~525K | 10% |
 
+#### About the Conv Layers
+
+Each Conv2d layer learns filters that detect specific patterns:
+- **Early layers**: Edges, corners, basic shapes
+- **Later layers**: Character components, complex textures
+
+The learning happens through training - filters that help reduce prediction error become stronger.
+
+**MaxPool Purpose:**
+Max pooling (taking maximum value in each 2×2 window) makes the network:
+- Translation invariant (pixel shifts don't affect detection)
+- More robust to variations in character position
+- Computationally cheaper for subsequent layers
+
+#### About BiLSTM Parameters
+
+Bidirectional LSTM processes sequences in both forward and backward directions:
+- **Forward direction**: Captures left-to-right context
+- **Backward direction**: Captures right-to-left context
+- **Combined**: Full bidirectional context for each position
+
+This is important for OCR because a character often depends on both preceding and following characters.
+
 **BiLSTM Specifications:**
 
 | Layer | Input | Hidden | Directions | Output |
 |-------|-------|--------|------------|---------|
 | LSTM 1 | 512 | 256 | 2 (bidirectional) | 256 |
 | LSTM 2 | 256 | 256 | 2 (bidirectional) | num_classes |
+
+#### About Parameter Distribution
+
+- **Block 4 (45%)**: Largest conv layer with 512 channels
+- **BiLSTM (25%)**: Handles sequential modeling
+- **Blocks 3-5**: Feature extraction
+- **Block 1-2**: Small initial features
+
+**Why fewer parameters than Swin:**
+- CRNN uses standard convolutions (local receptive fields)
+- No self-attention matrices
+- Single forward pass without attention overhead
+- LSTM has fewer parameters than transformer attention
 
 **Activation Functions:**
 
@@ -548,6 +677,58 @@ if height != 1:
 - **Sequential Output**: Each column = 1 time step
 - **Bidirectional**: Processes both directions for context
 - **CTC Ready**: Output [seq, batch, classes] format
+
+---
+
+### VRAM Usage - CRNN
+
+**What's stored in VRAM during training:**
+
+| Component | Description | Size (approximate) |
+|-----------|-------------|-------------------|
+| **Model weights** | The learned parameters | 5M × 2 bytes = ~10MB |
+| **Gradients** | Derivatives for backpropagation | 5M × 4 bytes = ~20MB |
+| **Adam optimizer state** | Momentum for each parameter | 5M × 8 bytes = ~40MB |
+| **Activations** | Intermediate values | Smaller than Swin |
+
+**Activations breakdown by layer:**
+
+| Layer | Activation Size per Sample | Total for Batch 32 |
+|-------|----------------------------|---------------------|
+| Block 1-5 | Variable by layer | ~50KB |
+| LSTM 1 | 31×512 × 2 | ~32KB |
+| LSTM 2 | 31×256 × 2 | ~16KB |
+| **Total activations** | | ~100KB per sample |
+
+**Estimated VRAM for training:**
+
+| Batch Size | Estimated VRAM |
+|-----------|----------------|
+| 16 | ~120MB |
+| 32 | ~150MB |
+| 64 | ~250MB |
+| 128 | ~450MB |
+
+**With AMP:**
+
+| Batch Size | Estimated VRAM |
+|-----------|----------------|
+| 32 | ~100MB |
+| 64 | ~180MB |
+| 128 | ~350MB |
+
+---
+
+### Swin vs CRNN VRAM Comparison
+
+| Metric | Swin-Tiny | CRNN |
+|--------|----------|------|
+| Parameters | ~28M | ~5M |
+| Base VRAM (batch 32) | ~700MB | ~150MB |
+| VRAM with AMP | ~500MB | ~100MB |
+| Can fit in 4GB GPU? | No (needs 6GB+) | Yes |
+| Can fit in 6GB GPU? | Yes (with AMP) | Yes |
+| Can fit in 8GB GPU? | Yes | Yes |
 
 ---
 

@@ -13,7 +13,7 @@ Production-ready multilingual OCR training using CTC (Connectionist Temporal Cla
 - Checkpoint management with best/latest saving and resume support
 - Automatic corrupt image handling with detailed logging
 
-For **technical details**, architecture decisions, and theory behind the implementation, see [`explanation.md`](explanation.md).
+For **technical details**, architecture decisions, and theory behind the implementation, see [`documentation.md`](documentation.md).
 
 ---
 

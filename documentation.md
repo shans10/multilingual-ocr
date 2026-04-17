@@ -781,6 +781,44 @@ Why smaller than Swin?
 - Trade-off: slightly lower accuracy
 ```
 
+### Image Size Handling
+
+The training scripts handle images of any size by resizing to the target dimensions while preserving aspect ratio.
+
+#### Resize and Pad Strategy
+
+All input images are resized to a fixed target size (48×224 for Swin, 32×128 for CRNN) using a letterbox approach:
+
+1. **Calculate scaling**: Determine the scale factor to fit within target bounds while preserving aspect ratio
+2. **Resize**: Scale the image to fit within target dimensions
+3. **Pad**: Add black padding to reach exact target size (centered)
+
+```
+Original image: 100×300 → Resize to fit within 48×224 → Pad to 48×224
+Original image: 200×400 → Resize to fit within 48×224 → Pad to 48×224
+Original image: 24×100 → Resize to fit within 48×224 → Pad to 48×224
+```
+
+#### Why This Approach?
+
+| Aspect | Description |
+|--------|-------------|
+| **No data loss** | All text is preserved - no cropping |
+| **Aspect ratio preserved** | Characters maintain proper shape |
+| **Consistent input** | All images become exact same size for batch processing |
+| **Black padding** | Uses black (0) as padding color - standard for OCR |
+
+#### Image Size Recommendations
+
+| Model | Default Size | Recommended For |
+|-------|-------------|-----------------|
+| Swin | 48×224 | Multilingual text with complex scripts (Hindi, Arabic, etc.) |
+| Swin | 32×224 | Simpler scripts, more VRAM constrained |
+| CRNN | 32×128 | Lightweight baseline, resource-constrained |
+| CRNN | 48×224 | Better accuracy with more compute |
+
+**Note:** Image dimensions should ideally be multiples of 4 for Swin due to the patch embedding dividing by 4 at each stage.
+
 **Why Batch Size 32 for both Swin and CRNN?**
 
 ```
@@ -794,6 +832,62 @@ CRNN batch=32:
 - Default kept conservative for consistency
 - With AMP, can double/triple batch size
 ```
+
+### Batch Size Selection Guide
+
+#### How to Determine Optimal Batch Size
+
+Batch size primarily depends on your GPU's VRAM. Here's the breakdown:
+
+**VRAM Breakdown (Swin-Tiny, batch_size=32):**
+
+| Component | Without AMP | With AMP |
+|-----------|-------------|----------|
+| Model weights | ~112MB | ~56MB |
+| Gradients | ~112MB | ~112MB |
+| Adam optimizer | ~224MB | ~224MB |
+| Activations | ~500-800MB | ~300-500MB |
+| **Total per batch** | **~1GB** | **~800MB** |
+
+#### Recommended Batch Sizes by GPU VRAM
+
+| GPU VRAM | Swin (No AMP) | Swin (AMP) | CRNN (No AMP) | CRNN (AMP) |
+|---------|---------------|------------|---------------|------------|
+| 4GB | 8-12 | 16-20 | 32-48 | 48-64 |
+| 6GB | 20-24 | 32-40 | 64-96 | 96-128 |
+| 8GB | 28-32 | 48-64 | 96-128 | 128-192 |
+| 12GB | 40-48 | 64-96 | 128-192 | 192-256 |
+| 24GB+ | 64+ | 96+ | 192+ | 256+ |
+
+#### How to Find Your Optimal Batch Size
+
+1. **Start conservative**: Use batch_size=16 for Swin, 32 for CRNN
+2. **Test for OOM**: Run a few training steps and check if CUDA out-of-memory occurs
+3. **Scale up gradually**: If no OOM, increase batch size by 4-8 until you approach memory limit
+4. **With AMP**: You can typically double the batch size compared to without AMP
+5. **Rule of thumb**: Leave ~500MB headroom for variations in input sizes
+
+#### Trade-offs
+
+| Higher Batch Size | Lower Batch Size |
+|-----------------|------------------|
+| More stable gradients | More noisy gradients |
+| Faster convergence | Slower convergence |
+| Better GPU utilization | Lower GPU utilization |
+| May need learning rate adjustment | May need smaller learning rate |
+
+#### Example Calculation
+
+For 8GB GPU with Swin and AMP:
+- Available: ~8GB minus system overhead (~1GB) = ~7GB usable
+- Per-sample with AMP: ~25MB
+- Maximum batch: 7GB / 25MB ≈ 280 samples
+- Conservative: 64-128 (to leave headroom)
+
+For 6GB GPU with Swin and AMP:
+- Available: ~6GB minus overhead ≈ 5GB
+- Maximum: 5GB / 25MB ≈ 200
+- Conservative: 32-48
 
 **Epochs:**
 

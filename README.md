@@ -185,7 +185,7 @@ python3 train_crnn_multilingual.py --amp
 
 ```bash
 # Custom image size, batch, epochs
-python3 train_swin_multilingual.py --img-height 64 --img-width 256 --batch-size 64 --epochs 80
+python3 train_swin_multilingual.py --image-size 256x64 --batch-size 64 --epochs 80
 
 # Limit training samples (for testing)
 python3 train_swin_multilingual.py --max-samples 10000
@@ -220,8 +220,7 @@ python3 train_swin_multilingual.py --learning-rate 5e-4
 
 | Argument | Swin Default | CRNN Default | Description |
 |----------|--------------|--------------|-------------|
-| `--img-height` | 48 | 32 | Input image height in pixels |
-| `--img-width` | 224 | 128 | Input image width in pixels |
+| `--image-size` | 224x48 | 128x32 | Image size as WxH (e.g., '224x48') |
 | `--batch-size` | 32 | 32 | Training batch size |
 | `--epochs` | 60 | 60 | Number of training epochs |
 | `--learning-rate` | 1e-4 | 1e-4 | Initial learning rate |
@@ -235,6 +234,7 @@ python3 train_swin_multilingual.py --learning-rate 5e-4
 | `--balance-languages` | `false` | Enable weighted sampling for equal language representation |
 | `--max-dominant-to-second-ratio` | `null` | Hard cap on dominant language ratio (e.g., 1.5) |
 | `--amp` | `false` | Enable Automatic Mixed Precision (GPU only, ~50% less VRAM) |
+| `--compile` | `false` | Enable torch.compile for faster training (10-30% speedup on modern GPUs) |
 
 ### Resume Arguments
 
@@ -323,7 +323,7 @@ python3 train_swin_multilingual.py
 
 **Fix in order:**
 1. Reduce `--batch-size`
-2. Reduce `--img-height` / `--img-width`
+2. Reduce `--image-size` (e.g., 224x48 → 160x32)
 3. Reduce `--num-workers`
 4. Enable `--amp` (uses ~50% less VRAM)
 

@@ -2,6 +2,7 @@
 
 import argparse
 import csv
+import gc
 import hashlib
 import io
 import json
@@ -40,6 +41,14 @@ class Config:
     learning_rate: float = 1e-4
     seed: int = 42
     num_workers: int = 4
+
+
+def parse_image_size(size_str: str, default_height: int = 32) -> tuple[int, int]:
+    """Parse 'WxH' (e.g., '128x32') or just width into (width, height)."""
+    if 'x' in size_str:
+        w, h = size_str.split('x')
+        return int(w), int(h)
+    return int(size_str), default_height
 
 
 def print_table(title: str, headers: List[str], rows: List[List[str]]) -> None:
@@ -610,12 +619,34 @@ class OCRDataset(Dataset):
         self.skipped_log_dir = skipped_log_dir
         self.lmdb_path = lmdb_path
         self.lmdb_env = None
+        self.img_height = img_height
+        self.img_width = img_width
         self.tf = transforms.Compose(
             [
-                transforms.Resize((img_height, img_width)),
+                transforms.Lambda(lambda img: self._resize_and_pad(img, img_height, img_width)),
                 transforms.ToTensor(),
             ]
         )
+
+    def _resize_and_pad(self, img, target_h, target_w):
+        """Resize image to fit within target bounds while preserving aspect ratio, then pad."""
+        from PIL import Image
+
+        # Calculate scaling - fit within bounds
+        scale = min(target_h / img.height, target_w / img.width)
+        new_w = int(img.width * scale)
+        new_h = int(img.height * scale)
+
+        # Resize
+        img = img.resize((new_w, new_h), Image.BILINEAR)
+
+        # Create new canvas and paste resized image (centered)
+        new_img = Image.new('RGB', (target_w, target_h), (0, 0, 0))  # black padding
+        paste_x = (target_w - new_w) // 2
+        paste_y = (target_h - new_h) // 2
+        new_img.paste(img, (paste_x, paste_y))
+
+        return new_img
 
     def __len__(self):
         return len(self.frame)
@@ -806,10 +837,9 @@ def train(args):
         epochs=args.epochs,
         patience=args.patience,
         learning_rate=args.learning_rate,
-        img_height=args.img_height,
-        img_width=args.img_width,
         num_workers=args.num_workers,
     )
+    cfg.img_width, cfg.img_height = parse_image_size(args.image_size, default_height=32)
 
     set_seed(cfg.seed)
 
@@ -956,6 +986,9 @@ def train(args):
     )
 
     model = CRNN(num_classes=num_classes).to(device)
+    if args.compile and device.type == "cuda":
+        tqdm.write("Compiling model with torch.compile()...")
+        model = torch.compile(model)
     criterion = nn.CTCLoss(blank=0, reduction="mean", zero_infinity=True)
     optimizer = optim.AdamW(model.parameters(), lr=cfg.learning_rate, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -1125,9 +1158,14 @@ def train(args):
             "wer": train_wer_sum / total,
             "accuracy": train_acc_sum / total,
             "skipped": train_skipped_sum,
-        }
+}
         tqdm.write("")
         tqdm.write(f"Starting validation for epoch {epoch + 1}/{cfg.epochs}...")
+
+        # Clean VRAM before validation
+        torch.cuda.empty_cache()
+        gc.collect()
+
         val_metrics = evaluate(
             model,
             val_loader,
@@ -1138,6 +1176,10 @@ def train(args):
             split_name=f"Validation {epoch + 1}",
             show_progress=True,
         )
+
+        # Clean VRAM after validation before next epoch
+        torch.cuda.empty_cache()
+        gc.collect()
 
         train_losses.append(train_metrics["loss"])
         val_losses.append(val_metrics["loss"])
@@ -1458,8 +1500,12 @@ def parse_args():
         "--manifest-out", type=str, default="./swin_multilingual_outputs/manifest.csv"
     )
     parser.add_argument("--verify-paths", action="store_true")
-    parser.add_argument("--img-height", type=int, default=32)
-    parser.add_argument("--img-width", type=int, default=128)
+    parser.add_argument(
+        "--image-size",
+        type=str,
+        default="128x32",
+        help="Image size as WxH (e.g., '128x32') or just width (default: 128x32)",
+    )
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--epochs", type=int, default=60)
     parser.add_argument("--patience", type=int, default=8)
@@ -1503,6 +1549,11 @@ def parse_args():
     parser.add_argument("--smoke-test", action="store_true")
     parser.add_argument(
         "--amp", action="store_true", help="Enable automatic mixed precision (GPU only)"
+    )
+    parser.add_argument(
+        "--compile",
+        action="store_true",
+        help="Enable torch.compile for faster training (PyTorch 2.0+, GPU only)",
     )
     return parser.parse_args()
 

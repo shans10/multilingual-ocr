@@ -1,4 +1,4 @@
-# Implementation Explanation
+# Theory and Implementation
 
 ## 1) Project Overview
 

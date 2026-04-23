@@ -234,7 +234,7 @@ python3 train_swin_multilingual.py --learning-rate 5e-4
 | `--balance-languages` | `false` | Enable weighted sampling for equal language representation |
 | `--max-dominant-to-second-ratio` | `null` | Hard cap on dominant language ratio (e.g., 1.5) |
 | `--amp` | `false` | Enable Automatic Mixed Precision (GPU only, ~50% less VRAM) |
-| `--compile` | `false` | Enable torch.compile for faster training (10-30% speedup on modern GPUs) |
+| `--compile` | `false` | Enable torch.compile for faster training (5-15% speedup, may show SM warning on laptop GPUs) |
 
 ### Resume Arguments
 

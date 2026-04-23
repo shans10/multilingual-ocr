@@ -45,8 +45,8 @@ class Config:
 
 def parse_image_size(size_str: str, default_height: int = 32) -> tuple[int, int]:
     """Parse 'WxH' (e.g., '128x32') or just width into (width, height)."""
-    if 'x' in size_str:
-        w, h = size_str.split('x')
+    if "x" in size_str:
+        w, h = size_str.split("x")
         return int(w), int(h)
     return int(size_str), default_height
 
@@ -623,7 +623,9 @@ class OCRDataset(Dataset):
         self.img_width = img_width
         self.tf = transforms.Compose(
             [
-                transforms.Lambda(lambda img: self._resize_and_pad(img, img_height, img_width)),
+                transforms.Lambda(
+                    lambda img: self._resize_and_pad(img, img_height, img_width)
+                ),
                 transforms.ToTensor(),
             ]
         )
@@ -641,7 +643,7 @@ class OCRDataset(Dataset):
         img = img.resize((new_w, new_h), Image.BILINEAR)
 
         # Create new canvas and paste resized image (centered)
-        new_img = Image.new('RGB', (target_w, target_h), (0, 0, 0))  # black padding
+        new_img = Image.new("RGB", (target_w, target_h), (0, 0, 0))  # black padding
         paste_x = (target_w - new_w) // 2
         paste_y = (target_h - new_h) // 2
         new_img.paste(img, (paste_x, paste_y))
@@ -846,13 +848,34 @@ def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if device.type == "cuda":
         torch.backends.cudnn.benchmark = True
+        tqdm.write("=== Run Setup ===")
         tqdm.write(
-            "Run setup | "
             f"device={device} | gpu={torch.cuda.get_device_name(0)} | "
-            f"gpu_memory={torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB"
+            f"gpu_memory={torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB | "
+            f"batch_size={cfg.batch_size}"
         )
     else:
-        tqdm.write(f"Run setup | device={device}")
+        tqdm.write("=== Run Setup ===")
+        tqdm.write(f"device={device} | batch_size={cfg.batch_size}")
+
+    try:
+        torch.set_float32_matmul_precision("high")
+        if device.type == "cuda":
+            tqdm.write("TF32 tensor cores enabled for faster matrix multiplication")
+    except RuntimeError:
+        pass
+
+    tqdm.write("")
+    tqdm.write("=== Training Settings ===")
+    amp_enabled = "true" if (args.amp and device.type == "cuda") else "false"
+    compile_enabled = "true" if (args.compile and device.type == "cuda") else "false"
+    settings = [
+        f"learning_rate={args.learning_rate:.1e}",
+        f"AMP={amp_enabled}",
+        f"torch.compile={compile_enabled}",
+    ]
+    tqdm.write(f"{' | '.join(settings)}")
+
     tqdm.write("")
 
     out_dir = Path(args.output_dir)
@@ -874,7 +897,8 @@ def train(args):
 
     if is_lmdb:
         # LMDB format: use pre-split data from index files (faster - no re-shuffling)
-        tqdm.write("Data | Format: LMDB (using pre-split data from index files)")
+        tqdm.write("=== Dataset ===")
+        tqdm.write("Format | LMDB (using pre-split data from index files)")
         train_df, val_df, test_df = load_lmdb_splits(
             dataset_root, args.max_rows_per_tsv
         )
@@ -887,7 +911,8 @@ def train(args):
         )  # Combined for stats
     else:
         # TSV format: build manifest and split (legacy)
-        tqdm.write("Data | Format: TSV (legacy - building manifest from TSV files)")
+        tqdm.write("=== Dataset ===")
+        tqdm.write("Format | TSV (legacy - building manifest from TSV files)")
         manifest_cache_path = (
             Path(args.manifest_cache)
             if args.manifest_cache
@@ -909,7 +934,7 @@ def train(args):
 
     lang_counts = df["language"].value_counts().to_dict()
     tqdm.write(
-        "Data | "
+        "Stats | "
         f"total={len(df)} | train={len(train_df)} | val={len(val_df)} | test={len(test_df)} | "
         f"languages={lang_counts}"
     )
@@ -952,6 +977,7 @@ def train(args):
     if args.balance_languages:
         train_sampler = build_language_sampler(train_df)
         tqdm.write("Sampling | language_balanced_sampler=enabled")
+        tqdm.write("")
 
     train_loader = DataLoader(
         train_ds,
@@ -986,9 +1012,6 @@ def train(args):
     )
 
     model = CRNN(num_classes=num_classes).to(device)
-    if args.compile and device.type == "cuda":
-        tqdm.write("Compiling model with torch.compile()...")
-        model = torch.compile(model)
     criterion = nn.CTCLoss(blank=0, reduction="mean", zero_infinity=True)
     optimizer = optim.AdamW(model.parameters(), lr=cfg.learning_rate, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -1020,8 +1043,15 @@ def train(args):
             raise FileNotFoundError(f"Resume checkpoint not found: {resume_path}")
 
         ckpt = torch.load(resume_path, map_location=device, weights_only=True)
+
+        # Check if user specified custom learning rate (different from default 1e-4)
+        use_custom_lr = args.learning_rate != 1e-4
+
         model.load_state_dict(ckpt["model_state_dict"])
-        if "optimizer_state_dict" in ckpt:
+
+        # Only load optimizer state if NOT using custom LR
+        # If user specifies custom LR, create fresh optimizer state with their LR
+        if not use_custom_lr and "optimizer_state_dict" in ckpt:
             optimizer.load_state_dict(ckpt["optimizer_state_dict"])
 
         if "char_to_idx" in ckpt and ckpt["char_to_idx"] != char_to_idx:
@@ -1042,11 +1072,14 @@ def train(args):
         train_accs = list(ckpt.get("train_accs", train_accs))
         val_accs = list(ckpt.get("val_accs", val_accs))
 
+        tqdm.write("=== Resume ===")
         tqdm.write(
-            "Resume | "
-            f"checkpoint={resume_path} | start_epoch={start_epoch + 1} | "
+            f"checkpoint={resume_path} | epoch={start_epoch + 1} | "
             f"best_val_loss={best_val_loss:.6f} | patience_count={patience_count}"
         )
+
+    if args.compile and device.type == "cuda":
+        model = torch.compile(model)
 
     log_path = log_dir / "training_log.csv"
     if start_epoch == 0:
@@ -1062,6 +1095,7 @@ def train(args):
 
     train_start = time.time()
     tqdm.write("")
+    tqdm.write("=== Training ===")
     tqdm.write(f"Training start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     if skipped_log_dir.exists():
@@ -1158,7 +1192,7 @@ def train(args):
             "wer": train_wer_sum / total,
             "accuracy": train_acc_sum / total,
             "skipped": train_skipped_sum,
-}
+        }
         tqdm.write("")
         tqdm.write(f"Starting validation for epoch {epoch + 1}/{cfg.epochs}...")
 
@@ -1191,8 +1225,10 @@ def train(args):
         val_accs.append(val_metrics["accuracy"])
         scheduler.step(val_metrics["loss"])
 
+        current_lr = optimizer.param_groups[0]["lr"]
+        tqdm.write("")
         tqdm.write(
-            f"Epoch {epoch + 1}/{cfg.epochs} | "
+            f"Epoch {epoch + 1}/{cfg.epochs} | lr={current_lr:.1e} | "
             f"train_loss={train_metrics['loss']:.4f} val_loss={val_metrics['loss']:.4f} | "
             f"train_cer={train_metrics['cer']:.4f} val_cer={val_metrics['cer']:.4f} | "
             f"train_wer={train_metrics['wer']:.4f} val_wer={val_metrics['wer']:.4f} | "
@@ -1212,7 +1248,9 @@ def train(args):
 
         ckpt = {
             "epoch": epoch + 1,
-            "model_state_dict": model.state_dict(),
+            "model_state_dict": model._orig_mod.state_dict()
+            if hasattr(model, "_orig_mod")
+            else model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "char_to_idx": char_to_idx,
             "idx_to_char": idx_to_char,
@@ -1244,12 +1282,16 @@ def train(args):
     tqdm.write(f"Training done in {(time.time() - train_start) / 60:.2f} minutes")
 
     tqdm.write("")
+    tqdm.write("=== Complete ===")
     tqdm.write("Training complete.")
     tqdm.write("Starting test evaluation on the best checkpoint...")
+    tqdm.write("")
+    tqdm.write("=== Testing ===")
     best_ckpt = torch.load(
         ckpt_dir / "best_checkpoint.pth", map_location=device, weights_only=True
     )
-    model.load_state_dict(best_ckpt["model_state_dict"])
+    model_to_load = model._orig_mod if hasattr(model, "_orig_mod") else model
+    model_to_load.load_state_dict(best_ckpt["model_state_dict"])
     test_metrics = evaluate(
         model,
         test_loader,
